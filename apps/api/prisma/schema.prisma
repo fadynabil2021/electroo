@@ -1,0 +1,392 @@
+generator client {
+  provider        = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ────────────────────────────────────────────────────
+
+enum Role {
+  CUSTOMER
+  ADMIN
+  RIDER
+  SUPER_ADMIN
+}
+
+enum OrderStatus {
+  PLACED
+  CONFIRMED
+  PREPARING
+  READY
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+}
+
+enum FulfillmentType {
+  DELIVERY
+  PICKUP
+  DINE_IN
+}
+
+enum PaymentMethod {
+  CARD
+  FAWRY
+  WALLET
+  CASH_ON_DELIVERY
+  CASH_AT_PICKUP
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  REFUND_INITIATED
+}
+
+enum CouponType {
+  PERCENTAGE
+  FIXED_AMOUNT
+  FREE_DELIVERY
+}
+
+enum AuthProvider {
+  EMAIL
+  GOOGLE
+  PHONE
+}
+
+// ─── USERS ────────────────────────────────────────────────────
+
+model User {
+  id                String    @id @default(uuid())
+  name              String
+  email             String?   @unique
+  phone             String?   @unique
+  passwordHash      String?
+  authProvider      AuthProvider @default(EMAIL)
+  googleId          String?   @unique
+  role              Role      @default(CUSTOMER)
+  isEmailVerified   Boolean   @default(false)
+  isPhoneVerified   Boolean   @default(false)
+  isActive          Boolean   @default(true)
+  preferredLocale   String    @default("en")
+  deletedAt         DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  addresses         Address[]
+  orders            Order[]
+  refreshTokens     RefreshToken[]
+  riderProfile      RiderProfile?
+
+  @@map("users")
+  @@index([email])
+  @@index([phone])
+  @@index([googleId])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+  @@index([userId])
+  @@index([tokenHash])
+}
+
+// ─── ADDRESSES ────────────────────────────────────────────────
+
+model Address {
+  id         String   @id @default(uuid())
+  userId     String
+  label      String   // "Home", "Work", custom
+  fullAddress String
+  landmark   String?
+  latitude   Decimal  @db.Decimal(10, 7)
+  longitude  Decimal  @db.Decimal(10, 7)
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders     Order[]
+
+  @@map("addresses")
+  @@index([userId])
+}
+
+// ─── MENU ─────────────────────────────────────────────────────
+
+model Category {
+  id            String      @id @default(uuid())
+  nameEn        String
+  nameAr        String
+  slug          String      @unique
+  description   String?
+  imageUrl      String?
+  displayOrder  Int         @default(0)
+  isActive      Boolean     @default(true)
+  parentId      String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  parent        Category?   @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children      Category[]  @relation("CategoryHierarchy")
+  menuItems     MenuItem[]
+
+  @@map("categories")
+  @@index([slug])
+  @@index([parentId])
+  @@index([displayOrder])
+}
+
+model MenuItem {
+  id              String          @id @default(uuid())
+  categoryId      String
+  nameEn          String
+  nameAr          String
+  slug            String          @unique
+  descriptionEn   String?
+  descriptionAr   String?
+  basePrice       Decimal         @db.Decimal(10, 2)
+  imageUrl        String?
+  isAvailable     Boolean         @default(true)
+  isFeatured      Boolean         @default(false)
+  displayOrder    Int             @default(0)
+  calories        Int?
+  allergens       String[]
+  deletedAt       DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  category        Category        @relation(fields: [categoryId], references: [id])
+  modifierGroups  ModifierGroup[]
+
+  @@map("menu_items")
+  @@index([categoryId])
+  @@index([slug])
+  @@index([isAvailable])
+  @@index([displayOrder])
+}
+
+model ModifierGroup {
+  id           String     @id @default(uuid())
+  menuItemId   String
+  nameEn       String
+  nameAr       String
+  minSelection Int        @default(0)
+  maxSelection Int        @default(1)
+  isRequired   Boolean    @default(false)
+  displayOrder Int        @default(0)
+
+  menuItem     MenuItem   @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  options      ModifierOption[]
+
+  @@map("modifier_groups")
+  @@index([menuItemId])
+}
+
+model ModifierOption {
+  id              String        @id @default(uuid())
+  modifierGroupId String
+  nameEn          String
+  nameAr          String
+  additionalPrice Decimal       @db.Decimal(10, 2) @default(0)
+  isDefault       Boolean       @default(false)
+  isAvailable     Boolean       @default(true)
+  displayOrder    Int           @default(0)
+
+  modifierGroup   ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+
+  @@map("modifier_options")
+  @@index([modifierGroupId])
+}
+
+// ─── ORDERS ───────────────────────────────────────────────────
+
+model Order {
+  id                String          @id @default(uuid())
+  orderNumber       String          @unique  // Human-readable: ORD-2024-001234
+  userId            String?         // Null for guest orders
+  guestName         String?
+  guestPhone        String?
+  guestEmail        String?
+  addressId         String?
+  deliveryAddress   Json?           // Snapshot of address at order time
+  status            OrderStatus     @default(PLACED)
+  fulfillmentType   FulfillmentType
+  scheduledFor      DateTime?
+  tableNumber       String?
+  notes             String?
+  subtotal          Decimal         @db.Decimal(10, 2)
+  deliveryFee       Decimal         @db.Decimal(10, 2) @default(0)
+  taxAmount         Decimal         @db.Decimal(10, 2)
+  serviceFee        Decimal         @db.Decimal(10, 2) @default(0)
+  discountAmount    Decimal         @db.Decimal(10, 2) @default(0)
+  totalAmount       Decimal         @db.Decimal(10, 2)
+  paymentMethod     PaymentMethod
+  paymentStatus     PaymentStatus   @default(PENDING)
+  couponId          String?
+  riderId           String?
+  cancelledAt       DateTime?
+  cancelReason      String?
+  deliveredAt       DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  user              User?           @relation(fields: [userId], references: [id])
+  address           Address?        @relation(fields: [addressId], references: [id])
+  coupon            Coupon?         @relation(fields: [couponId], references: [id])
+  rider             RiderProfile?   @relation(fields: [riderId], references: [id])
+  items             OrderItem[]
+  payment           Payment?
+  statusHistory     OrderStatusHistory[]
+
+  @@map("orders")
+  @@index([userId])
+  @@index([status])
+  @@index([riderId])
+  @@index([createdAt])
+  @@index([orderNumber])
+  @@index([paymentStatus])
+}
+
+model OrderItem {
+  id                String   @id @default(uuid())
+  orderId           String
+  menuItemId        String?  // Nullable in case item deleted later
+  itemNameEn        String   // Snapshot
+  itemNameAr        String   // Snapshot
+  unitPrice         Decimal  @db.Decimal(10, 2)
+  quantity          Int
+  modifierSnapshot  Json     // Array of selected modifiers with prices
+  itemNotes         String?
+  lineTotal         Decimal  @db.Decimal(10, 2)
+
+  order             Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("order_items")
+  @@index([orderId])
+}
+
+model OrderStatusHistory {
+  id          String      @id @default(uuid())
+  orderId     String
+  fromStatus  OrderStatus?
+  toStatus    OrderStatus
+  changedById String?     // Admin or system user ID
+  note        String?
+  createdAt   DateTime    @default(now())
+
+  order       Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("order_status_history")
+  @@index([orderId])
+}
+
+// ─── PAYMENTS ─────────────────────────────────────────────────
+
+model Payment {
+  id                String        @id @default(uuid())
+  orderId           String        @unique
+  method            PaymentMethod
+  status            PaymentStatus @default(PENDING)
+  amount            Decimal       @db.Decimal(10, 2)
+  currency          String        @default("EGP")
+  gatewayOrderId    String?       // Paymob order ID
+  gatewayTxnId      String?       // Paymob transaction ID
+  fawryReferenceNum String?
+  gatewayResponse   Json?         // Full gateway callback stored for audit
+  refundedAmount    Decimal?      @db.Decimal(10, 2)
+  refundedAt        DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  order             Order         @relation(fields: [orderId], references: [id])
+
+  @@map("payments")
+  @@index([orderId])
+  @@index([gatewayTxnId])
+  @@index([fawryReferenceNum])
+}
+
+// ─── COUPONS ──────────────────────────────────────────────────
+
+model Coupon {
+  id              String     @id @default(uuid())
+  code            String     @unique
+  type            CouponType
+  value           Decimal    @db.Decimal(10, 2)
+  minOrderAmount  Decimal?   @db.Decimal(10, 2)
+  maxUsages       Int?
+  perUserLimit    Int        @default(1)
+  usageCount      Int        @default(0)
+  isActive        Boolean    @default(true)
+  validFrom       DateTime
+  validUntil      DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  orders          Order[]
+
+  @@map("coupons")
+  @@index([code])
+  @@index([isActive])
+}
+
+// ─── BANNERS ──────────────────────────────────────────────────
+
+model Banner {
+  id           String   @id @default(uuid())
+  titleEn      String?
+  titleAr      String?
+  imageUrl     String
+  linkUrl      String?
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("banners")
+  @@index([isActive, displayOrder])
+}
+
+// ─── RIDERS ───────────────────────────────────────────────────
+
+model RiderProfile {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  vehicleType   String?
+  plateNumber   String?
+  isOnline      Boolean  @default(false)
+  lastLatitude  Decimal? @db.Decimal(10, 7)
+  lastLongitude Decimal? @db.Decimal(10, 7)
+  lastSeenAt    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user          User     @relation(fields: [userId], references: [id])
+  orders        Order[]
+
+  @@map("rider_profiles")
+}
+
+// ─── SETTINGS ─────────────────────────────────────────────────
+
+model Setting {
+  key       String @id
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}
