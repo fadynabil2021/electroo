@@ -114,10 +114,20 @@ export default function Home() {
       );
     }
   }, []);
-
   // Connect to websocket server
   useEffect(() => {
-    socketRef.current = io('http://localhost:3011/events', {
+    const wsUrl = (() => {
+      if (process.env.NEXT_PUBLIC_WS_URL) {
+        return process.env.NEXT_PUBLIC_WS_URL;
+      }
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+      if (apiUrl) {
+        return apiUrl.replace(/\/api\/v1\/?$/, '');
+      }
+      return 'http://localhost:3011';
+    })();
+
+    socketRef.current = io(`${wsUrl}/events`, {
       transports: ['websocket', 'polling'],
       auth: { token: typeof window !== 'undefined' ? localStorage.getItem('access_token') : '' },
     });

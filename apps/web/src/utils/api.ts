@@ -1,6 +1,11 @@
 'use strict';
 
-const API_BASE = 'http://localhost:3011/api/v1';
+const getApiBase = () => {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3011';
+  return apiUrl.endsWith('/api/v1') ? apiUrl : `${apiUrl}/api/v1`;
+};
+
+const API_BASE = getApiBase();
 
 async function request(path: string, options: RequestInit = {}) {
   const headers = {
